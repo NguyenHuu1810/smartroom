@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Đăng nhập | SmartRoom</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/auth.css">
+  <link rel="stylesheet" href="css/responsive.css">
+</head>
+
+<body class="auth-page">
+  <main class="auth-shell">
+    <section class="auth-photo" aria-label="Khu căn hộ SmartRoom">
+      <div class="photo-brand">
+        <span class="brand-mark"><i class="fa-solid fa-house-signal"></i></span>
+        <strong>SmartRoom</strong>
+        <p>Quản lý phòng trọ thông minh</p>
+      </div>
+    </section>
+
+    <section class="auth-form-panel">
+      <form id="login-form" class="login-form" novalidate>
+        <div class="mobile-brand">
+          <i class="fa-solid fa-house-signal"></i>
+          <strong>SmartRoom</strong>
+        </div>
+
+        <h1>Đăng nhập SmartRoom</h1>
+
+        <label class="field-label" for="username">Tên đăng nhập</label>
+        <div class="input-wrap">
+          <i class="fa-regular fa-user"></i>
+          <input id="username" name="username" autocomplete="username" placeholder="Nhập tên đăng nhập">
+        </div>
+
+        <label class="field-label" for="password">Mật khẩu</label>
+        <div class="input-wrap">
+          <i class="fa-solid fa-lock"></i>
+          <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Nhập mật khẩu">
+          <button class="password-toggle" type="button" aria-label="Hiện mật khẩu">
+            <i class="fa-regular fa-eye"></i>
+          </button>
+        </div>
+
+        <div class="form-options">
+          <label><input type="checkbox" id="remember"> Ghi nhớ đăng nhập</label>
+          <button type="button" class="link-button" id="forgot-password">Quên mật khẩu?</button>
+        </div>
+
+        <p id="login-message" class="form-message" aria-live="polite"></p>
+
+        <button class="btn btn-primary btn-login" type="submit">Đăng nhập</button>
+        <button id="googleLoginBtn" class="btn btn-google" type="button">
+          <i class="fa-brands fa-google"></i>
+          Đăng nhập bằng Google
+        </button>
+      </form>
+    </section>
+  </main>
+
+  <script type="module" src="js/auth.js?v=101"></script>
+</body>
+</html>

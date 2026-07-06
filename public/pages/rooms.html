@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Phòng | SmartRoom</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="../css/smartroom.css?v=101">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand"><i class="fa-solid fa-house-signal"></i><span>SmartRoom</span></div>
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Thu gọn"><i class="fa-solid fa-bars"></i></button>
+      </div>
+      <nav class="menu">
+        <a href="dashboard.html"><i class="fa-solid fa-table-columns"></i><span>Dashboard</span></a>
+        <a class="active" href="rooms.html"><i class="fa-solid fa-building"></i><span>Phòng</span></a>
+        <a href="tenants.html"><i class="fa-solid fa-users"></i><span>Người thuê</span></a>
+        <a href="accounts.html"><i class="fa-solid fa-user-shield"></i><span>Tài khoản</span></a>
+      </nav>
+      <button class="logout-btn" id="logoutBtn" type="button"><i class="fa-solid fa-right-from-bracket"></i><span>Đăng xuất</span></button>
+    </aside>
+
+    <main class="main">
+      <header class="page-head">
+        <h1>Phòng</h1>
+        <button class="btn btn-primary" id="openRoomDialog"><i class="fa-solid fa-plus"></i> Thêm phòng</button>
+      </header>
+
+      <section class="toolbar">
+        <input id="search" placeholder="Tìm phòng, khu, người thuê">
+        <select id="statusFilter">
+          <option value="all">Tất cả trạng thái</option>
+          <option value="occupied">Đang thuê</option>
+          <option value="vacant">Phòng trống</option>
+          <option value="maintenance">Bảo trì</option>
+        </select>
+        <select id="buildingFilter"></select>
+      </section>
+
+      <section class="grid-list" id="roomGrid"></section>
+    </main>
+  </div>
+
+  <dialog class="dialog" id="roomDialog">
+    <form id="roomForm">
+      <div class="dialog-head">
+        <h2>Thêm phòng</h2>
+        <button class="btn btn-secondary" type="button" data-close>Đóng</button>
+      </div>
+      <div class="dialog-grid">
+        <label class="field"><span>Khu/Tòa</span><input name="building" placeholder="Khu A" required></label>
+        <label class="field"><span>Tầng</span><input name="floor" type="number" value="1" required></label>
+        <label class="field"><span>Mã phòng</span><input name="id" placeholder="A301" required></label>
+        <label class="field"><span>Diện tích m²</span><input name="area" type="number" value="25"></label>
+        <label class="field"><span>Giá thuê</span><input name="rent" type="number" value="2500000"></label>
+        <label class="field"><span>Trạng thái</span>
+          <select name="status">
+            <option value="vacant">Phòng trống</option>
+            <option value="maintenance">Bảo trì</option>
+          </select>
+        </label>
+        <label class="field"><span>Đèn trần</span><input name="lightCount" type="number" min="0" max="20" value="1"></label>
+        <label class="field"><span>Quạt trần</span><input name="fanCount" type="number" min="0" max="20" value="1"></label>
+        <label class="field"><span>Máy lạnh</span><input name="acCount" type="number" min="0" max="20" value="0"></label>
+        <label class="field"><span>Khóa/cảm biến cửa</span><input name="doorCount" type="number" min="0" max="20" value="1"></label>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-primary">Lưu phòng</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog" id="detailDialog">
+    <form id="requestForm">
+      <div class="dialog-head">
+        <h2 id="detailTitle">Chi tiết phòng</h2>
+        <button class="btn btn-secondary" type="button" data-close>Đóng</button>
+      </div>
+      <div id="roomDetail"></div>
+      <div class="dialog-grid">
+        <label class="field"><span>Tạo phiếu xử lý nội bộ</span><input name="title" placeholder="Ví dụ: Nước yếu"></label>
+        <label class="field"><span>Trạng thái</span>
+          <select name="status">
+            <option value="new">Mới</option>
+            <option value="processing">Đang xử lý</option>
+          </select>
+        </label>
+      </div>
+      <label class="field"><span>Nội dung phiếu</span><textarea name="detail" placeholder="Mô tả sự cố nhân viên ghi nhận"></textarea></label>
+      <div class="dialog-actions">
+        <button class="btn btn-primary">Lưu phiếu</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="../js/smartroom-layout.js?v=101"></script>
+  <script type="module">
+    import {
+      loadStoreWithFirebase,
+      saveStore,
+      money,
+      sensorText,
+      statusText,
+      statusBadge,
+      requestStatusText,
+      tenantById,
+      requestsByRoom,
+      roomBill,
+      nextId,
+      roomDevices,
+      deviceStatusText,
+      buildRoomDevices,
+      defaultDevice,
+      addActivityLog,
+      syncFirebaseUpdates,
+      firebaseWriteError
+    } from "../js/smartroom-store.js?v=101";
+
+    let store = await loadStoreWithFirebase();
+    let selectedRoomId = "";
+    const roomGrid = document.getElementById("roomGrid");
+    const search = document.getElementById("search");
+    const statusFilter = document.getElementById("statusFilter");
+    const buildingFilter = document.getElementById("buildingFilter");
+    const roomDialog = document.getElementById("roomDialog");
+    const detailDialog = document.getElementById("detailDialog");
+
+    function renderBuildingFilter() {
+      const buildings = [...new Set(store.rooms.map((room) => room.building))];
+      buildingFilter.innerHTML = `<option value="all">Tất cả khu</option>` + buildings.map((name) => `<option value="${name}">${name}</option>`).join("");
+    }
+
+    function roomCard(room) {
+      const tenant = tenantById(store, room.tenantId);
+      const openRequests = requestsByRoom(store, room.id);
+      const bill = roomBill(store, room);
+      const requestBadge = openRequests.length ? `<span class="badge badge-red">${openRequests.length} yêu cầu</span>` : "";
+      const monthMoney = room.status === "occupied" && room.tenantId ? money(bill.total) : "Chưa phát sinh";
+
+      return `
+        <article class="card room-card">
+          <div class="room-title">
+            <div>
+              <h2>Phòng ${room.id}</h2>
+              <div class="room-meta">${room.building} · Tầng ${room.floor} · ${room.area} m²</div>
+            </div>
+            <span class="badge ${statusBadge(room.status)}">${statusText(room.status)}</span>
+          </div>
+
+          <div class="info-grid">
+            <div class="info-box"><span>Giá thuê</span><strong>${money(room.rent)}/tháng</strong></div>
+            <div class="info-box"><span>Người thuê</span><strong>${tenant ? tenant.name : "-"}</strong></div>
+            <div class="info-box"><span>Liên hệ</span><strong>${tenant ? tenant.phone : "-"}</strong></div>
+            <div class="info-box"><span>Điện nước</span><strong>${room.electricUsage} kWh · ${room.waterUsage} m³</strong></div>
+            <div class="info-box"><span>Tiền tháng này</span><strong>${monthMoney}</strong></div>
+            <div class="info-box"><span>Môi trường</span><strong>${sensorText(room.temperature, "°C")} · ${sensorText(room.humidity, "%")}</strong></div>
+          </div>
+
+          <div class="actions">
+            ${requestBadge}
+            <button class="btn btn-primary" data-detail="${room.id}">Xem chi tiết phòng</button>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderRooms() {
+      const keyword = search.value.trim().toLowerCase();
+      const status = statusFilter.value;
+      const building = buildingFilter.value;
+
+      const rooms = store.rooms.filter((room) => {
+        const tenant = tenantById(store, room.tenantId);
+        const text = `${room.id} ${room.building} ${tenant ? tenant.name : ""}`.toLowerCase();
+        return (!keyword || text.includes(keyword))
+          && (status === "all" || room.status === status)
+          && (building === "all" || room.building === building);
+      });
+
+      roomGrid.innerHTML = rooms.map(roomCard).join("") || `<p class="muted">Không có phòng phù hợp.</p>`;
+    }
+
+    function openDetail(roomId) {
+      selectedRoomId = roomId;
+      const room = store.rooms.find((item) => item.id === roomId);
+      if (!room) {
+        alert("Không tìm thấy phòng này hoặc phòng đã bị xóa.");
+        return;
+      }
+      const tenant = tenantById(store, room.tenantId);
+      const bill = roomBill(store, room);
+      const requests = requestsByRoom(store, room.id);
+      const devices = roomDevices(store, room.id);
+      const requestList = requests.length ? requests.map((request) => `
+        <div class="list-item request-row">
+          <div class="mini-icon orange"><i class="fa-solid fa-message"></i></div>
+          <div>
+            <p class="item-title">${request.title}</p>
+            <p class="item-sub">${request.detail || request.createdAt}</p>
+          </div>
+          <span class="badge ${statusBadge(request.status)}">${requestStatusText(request.status)}</span>
+          <button class="btn btn-secondary" type="button" data-request-status="${request.id}" data-status="processing">Xử lý</button>
+          <button class="btn btn-primary" type="button" data-request-status="${request.id}" data-status="done">Xong</button>
+        </div>
+      `).join("") : `<p class="muted">Không có yêu cầu đang mở.</p>`;
+      const deviceList = devices.length ? devices.map((device) => `
+        <div class="list-item">
+          <div class="mini-icon blue"><i class="fa-solid ${device.type === "ac" ? "fa-snowflake" : device.type === "fan" ? "fa-fan" : device.type === "door" ? "fa-door-closed" : "fa-lightbulb"}"></i></div>
+          <div><p class="item-title">${device.name}</p><p class="item-sub">${device.type} · ${deviceStatusText(device)}</p></div>
+          <span class="badge badge-gray">${device.id}</span>
+          <button class="btn btn-danger" type="button" data-delete-device="${device.id}">Xóa</button>
+        </div>
+      `).join("") : `<p class="muted">Phòng này chưa gán thiết bị.</p>`;
+      document.getElementById("detailTitle").textContent = `Phòng ${room.id}`;
+      document.getElementById("roomDetail").innerHTML = `
+        <div class="detail-grid">
+          <div class="info-box"><span>Khu/Tầng</span><strong>${room.building} · Tầng ${room.floor}</strong></div>
+          <div class="info-box"><span>Trạng thái</span><strong>${statusText(room.status)}</strong></div>
+          <div class="info-box"><span>Giá thuê</span><strong>${money(room.rent)}</strong></div>
+          <div class="info-box"><span>Người thuê</span><strong>${tenant ? tenant.name : "-"}</strong></div>
+          <div class="info-box"><span>Điện đầu kỳ</span><strong>${room.electricStart} kWh</strong></div>
+          <div class="info-box"><span>Điện hiện tại</span><strong>${room.electricCurrent} kWh</strong></div>
+          <div class="info-box"><span>Điện tiêu thụ</span><strong>${room.electricUsage} kWh · ${money(bill.electricFee)}</strong></div>
+          <div class="info-box"><span>Nước đầu kỳ</span><strong>${room.waterStart} m³</strong></div>
+          <div class="info-box"><span>Nước hiện tại</span><strong>${room.waterCurrent} m³</strong></div>
+          <div class="info-box"><span>Nước tiêu thụ</span><strong>${room.waterUsage} m³ · ${money(bill.waterFee)}</strong></div>
+          <div class="info-box"><span>Nhiệt độ</span><strong>${sensorText(room.temperature, "°C")}</strong></div>
+          <div class="info-box"><span>Độ ẩm</span><strong>${sensorText(room.humidity, "%")}</strong></div>
+        </div>
+        <div class="dialog-grid" style="margin-top:12px">
+          <label class="field"><span>Trạng thái phòng</span>
+            <select id="detailRoomStatus">
+              <option value="vacant" ${room.status === "vacant" ? "selected" : ""}>Phòng trống</option>
+              <option value="occupied" ${room.status === "occupied" ? "selected" : ""}>Đang thuê</option>
+              <option value="maintenance" ${room.status === "maintenance" ? "selected" : ""}>Bảo trì</option>
+              <option value="inactive" ${room.status === "inactive" ? "selected" : ""}>Ngưng dùng</option>
+            </select>
+          </label>
+          <label class="field"><span>Giá thuê</span><input id="detailRent" type="number" value="${room.rent || 0}"></label>
+          <label class="field"><span>Trạng thái thanh toán</span>
+            <select id="detailPayment">
+              <option value="none" ${room.paymentStatus === "none" ? "selected" : ""}>Chưa phát sinh</option>
+              <option value="unpaid" ${room.paymentStatus === "unpaid" ? "selected" : ""}>Chưa thanh toán</option>
+              <option value="paid" ${room.paymentStatus === "paid" ? "selected" : ""}>Đã thanh toán</option>
+              <option value="late" ${room.paymentStatus === "late" ? "selected" : ""}>Chậm thanh toán</option>
+            </select>
+          </label>
+          <label class="field"><span>Hạn đóng</span><input id="detailDueDate" value="${room.dueDate || ""}"></label>
+        </div>
+        <div class="dialog-actions" style="margin-top:10px">
+          <button class="btn btn-secondary" type="button" id="saveRoomInfo">Lưu thông tin phòng</button>
+          <button class="btn btn-danger" type="button" id="deleteRoom">Xóa phòng</button>
+        </div>
+        <div class="info-box" style="margin-top:12px">
+          <span>Thiết bị thông minh</span>
+          <div class="list" style="margin-top:8px">${deviceList}</div>
+          <div class="device-add-row">
+            <select id="deviceType">
+              <option value="light">Đèn trần</option>
+              <option value="fan">Quạt trần</option>
+              <option value="ac">Máy lạnh</option>
+              <option value="door">Khóa/cảm biến cửa</option>
+            </select>
+            <button class="btn btn-primary" type="button" id="addDevice">Thêm thiết bị</button>
+          </div>
+        </div>
+        <div class="info-box" style="margin-top:12px">
+          <span>Yêu cầu & xử lý</span>
+          <div class="list" style="margin-top:8px">${requestList}</div>
+        </div>
+      `;
+      detailDialog.showModal();
+    }
+
+    document.addEventListener("click", (event) => {
+      const detailButton = event.target.closest("[data-detail]");
+      if (detailButton) openDetail(detailButton.dataset.detail);
+      if (event.target.matches("[data-close]")) event.target.closest("dialog").close();
+
+      const requestButton = event.target.closest("[data-request-status]");
+      if (requestButton) {
+        const request = store.requests.find((item) => item.id === requestButton.dataset.requestStatus);
+        if (!request) return;
+        request.status = requestButton.dataset.status;
+        const log = addActivityLog(
+          store,
+          `Cập nhật yêu cầu ${request.id}`,
+          `requests/${request.id}`,
+          `Phòng ${request.roomId}: ${requestStatusText(request.status)}`
+        );
+        saveStore(store);
+        openDetail(selectedRoomId);
+        renderRooms();
+        syncFirebaseUpdates({
+          [`requests/${request.id}`]: request,
+          [`activityLogs/${log.id}`]: log
+        }).catch(firebaseWriteError);
+      }
+
+      if (event.target.matches("#saveRoomInfo")) {
+        const room = store.rooms.find((item) => item.id === selectedRoomId);
+        if (!room) return;
+        const nextStatus = document.getElementById("detailRoomStatus").value;
+        if (room.tenantId && nextStatus !== "occupied") {
+          alert("Phòng đang có người thuê. Hãy kết thúc thuê ở trang Người thuê trước khi chuyển phòng về trống/bảo trì.");
+          return;
+        }
+        if (!room.tenantId && nextStatus === "occupied") {
+          alert("Muốn chuyển sang Đang thuê thì hãy gán người thuê ở trang Người thuê.");
+          return;
+        }
+        room.status = nextStatus;
+        room.rent = Number(document.getElementById("detailRent").value || 0);
+        room.paymentStatus = document.getElementById("detailPayment").value;
+        room.dueDate = document.getElementById("detailDueDate").value.trim();
+        if (room.status === "occupied") {
+          if (room.paymentStatus === "none") room.paymentStatus = "unpaid";
+          room.dueDate ||= "10/07/2026";
+        } else {
+          room.paymentStatus = "none";
+          room.dueDate = "";
+        }
+        const log = addActivityLog(
+          store,
+          `Cập nhật phòng ${room.id}`,
+          `rooms/${room.id}`,
+          `Trạng thái: ${statusText(room.status)}, giá thuê: ${money(room.rent)}`
+        );
+        saveStore(store);
+        openDetail(selectedRoomId);
+        renderRooms();
+        syncFirebaseUpdates({
+          [`rooms/${room.id}`]: room,
+          [`activityLogs/${log.id}`]: log
+        }).catch(firebaseWriteError);
+      }
+
+      const deleteDeviceButton = event.target.closest("[data-delete-device]");
+      if (deleteDeviceButton) {
+        const room = store.rooms.find((item) => item.id === selectedRoomId);
+        if (!room) return;
+        const devices = roomDevices(store, room.id);
+        const index = devices.findIndex((device) => device.id === deleteDeviceButton.dataset.deleteDevice);
+        if (index < 0) return;
+        const device = devices[index];
+        if (!confirm(`Xóa ${device.name} khỏi phòng ${room.id}?`)) return;
+        devices.splice(index, 1);
+        const log = addActivityLog(
+          store,
+          `Xóa thiết bị ${device.name}`,
+          `devices/${room.id}/${device.id}`,
+          `Gỡ ${device.name} khỏi phòng ${room.id}`
+        );
+        saveStore(store);
+        openDetail(selectedRoomId);
+        renderRooms();
+        syncFirebaseUpdates({
+          [`devices/${room.id}/${device.id}`]: null,
+          [`activityLogs/${log.id}`]: log
+        }).catch(firebaseWriteError);
+      }
+
+      if (event.target.matches("#addDevice")) {
+        const room = store.rooms.find((item) => item.id === selectedRoomId);
+        if (!room) return;
+        const devices = roomDevices(store, room.id);
+        const device = defaultDevice(document.getElementById("deviceType").value, devices);
+        devices.push(device);
+        const log = addActivityLog(
+          store,
+          `Thêm thiết bị ${device.name}`,
+          `devices/${room.id}/${device.id}`,
+          `Gán ${device.name} vào phòng ${room.id}`
+        );
+        saveStore(store);
+        openDetail(selectedRoomId);
+        renderRooms();
+        syncFirebaseUpdates({
+          [`devices/${room.id}/${device.id}`]: device,
+          [`activityLogs/${log.id}`]: log
+        }).catch(firebaseWriteError);
+      }
+
+      if (event.target.matches("#deleteRoom")) {
+        const room = store.rooms.find((item) => item.id === selectedRoomId);
+        if (!room) return;
+        if (room.tenantId) {
+          alert("Phòng đang có người thuê. Hãy kết thúc thuê trước khi xóa phòng.");
+          return;
+        }
+        if (!confirm(`Xóa phòng ${room.id} và dữ liệu thiết bị/yêu cầu liên quan?`)) return;
+        const removedRequests = store.requests.filter((request) => request.roomId === room.id);
+        store.rooms = store.rooms.filter((item) => item.id !== room.id);
+        store.requests = store.requests.filter((request) => request.roomId !== room.id);
+        delete store.devices[room.id];
+        delete store.controlLogs[room.id];
+        const log = addActivityLog(
+          store,
+          `Xóa phòng ${room.id}`,
+          `rooms/${room.id}`,
+          `${room.building}, tầng ${room.floor}; xóa ${removedRequests.length} yêu cầu liên quan`
+        );
+        saveStore(store);
+        detailDialog.close();
+        renderBuildingFilter();
+        renderRooms();
+        const requestDeletes = Object.fromEntries(removedRequests.map((request) => [`requests/${request.id}`, null]));
+        syncFirebaseUpdates({
+          [`rooms/${room.id}`]: null,
+          [`devices/${room.id}`]: null,
+          [`controlLogs/${room.id}`]: null,
+          ...requestDeletes,
+          [`activityLogs/${log.id}`]: log
+        }).catch(firebaseWriteError);
+      }
+    });
+
+    document.getElementById("openRoomDialog").addEventListener("click", () => roomDialog.showModal());
+
+    document.getElementById("roomForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.currentTarget));
+      const id = data.id.trim().toUpperCase();
+      if (store.rooms.some((room) => room.id === id)) {
+        alert("Mã phòng đã tồn tại.");
+        return;
+      }
+      const room = {
+        id,
+        building: data.building.trim() || "Khu chính",
+        floor: Number(data.floor || 1),
+        area: Number(data.area || 0),
+        rent: Number(data.rent || 0),
+        status: data.status,
+        tenantId: "",
+        electricStart: 0,
+        electricCurrent: 0,
+        electricUsage: 0,
+        electric: 0,
+        waterStart: 0,
+        waterCurrent: 0,
+        waterUsage: 0,
+        water: 0,
+        temperature: null,
+        humidity: null,
+        paymentStatus: "none",
+        dueDate: ""
+      };
+      store.rooms.push(room);
+      const devices = buildRoomDevices(data);
+      store.devices[id] = devices;
+      store.controlLogs[id] = [];
+      const log = addActivityLog(
+        store,
+        `Thêm phòng ${id}`,
+        `rooms/${id}`,
+        `${room.building}, tầng ${room.floor}, giá ${money(room.rent)}, thiết bị: ${devices.map((device) => device.name).join(", ") || "không có"}`
+      );
+      saveStore(store);
+      event.currentTarget.reset();
+      roomDialog.close();
+      renderBuildingFilter();
+      renderRooms();
+      try {
+        await syncFirebaseUpdates({
+          [`rooms/${id}`]: room,
+          [`devices/${id}`]: Object.fromEntries(devices.map((device) => [device.id, device])),
+          [`controlLogs/${id}`]: [],
+          [`activityLogs/${log.id}`]: log
+        });
+      } catch (error) {
+        firebaseWriteError(error);
+      }
+    });
+
+    document.getElementById("requestForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.currentTarget));
+      if (!data.title.trim()) {
+        alert("Nhập tiêu đề yêu cầu trước.");
+        return;
+      }
+      const room = store.rooms.find((item) => item.id === selectedRoomId);
+      const request = {
+        id: nextId("R", store.requests),
+        roomId: selectedRoomId,
+        tenantId: room.tenantId,
+        title: data.title.trim(),
+        detail: data.detail.trim(),
+        status: data.status,
+        source: "internal",
+        createdAt: new Date().toLocaleString("vi-VN")
+      };
+      store.requests.push(request);
+      const log = addActivityLog(
+        store,
+        `Tạo phiếu xử lý ${request.id}`,
+        `requests/${request.id}`,
+        `Phòng ${request.roomId}: ${request.title}`
+      );
+      saveStore(store);
+      event.currentTarget.reset();
+      detailDialog.close();
+      renderRooms();
+      try {
+        await syncFirebaseUpdates({
+          [`requests/${request.id}`]: request,
+          [`activityLogs/${log.id}`]: log
+        });
+      } catch (error) {
+        firebaseWriteError(error);
+      }
+    });
+
+    [search, statusFilter, buildingFilter].forEach((control) => control.addEventListener("input", renderRooms));
+    renderBuildingFilter();
+    renderRooms();
+
+    const params = new URLSearchParams(location.search);
+    if (params.get("room")) openDetail(params.get("room"));
+  </script>
+</body>
+</html>

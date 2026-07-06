@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tài khoản | SmartRoom</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="../css/smartroom.css?v=101">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand"><i class="fa-solid fa-house-signal"></i><span>SmartRoom</span></div>
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Thu gọn"><i class="fa-solid fa-bars"></i></button>
+      </div>
+      <nav class="menu">
+        <a href="dashboard.html"><i class="fa-solid fa-table-columns"></i><span>Dashboard</span></a>
+        <a href="rooms.html"><i class="fa-solid fa-building"></i><span>Phòng</span></a>
+        <a href="tenants.html"><i class="fa-solid fa-users"></i><span>Người thuê</span></a>
+        <a class="active" href="accounts.html"><i class="fa-solid fa-user-shield"></i><span>Tài khoản</span></a>
+      </nav>
+      <button class="logout-btn" id="logoutBtn" type="button"><i class="fa-solid fa-right-from-bracket"></i><span>Đăng xuất</span></button>
+    </aside>
+
+    <main class="main">
+      <header class="page-head">
+        <h1>Tài khoản</h1>
+        <button class="btn btn-primary" id="openStaffDialog" type="button"><i class="fa-solid fa-user-plus"></i> Thêm nhân viên</button>
+      </header>
+
+      <section class="stats-grid" id="accountStats"></section>
+
+      <section class="panel">
+        <div class="toolbar">
+          <input id="search" placeholder="Tìm tên hoặc email">
+          <select id="roleFilter">
+            <option value="all">Tất cả vai trò</option>
+            <option value="manager">Quản lý</option>
+            <option value="staff">Nhân viên</option>
+            <option value="tenant">Người thuê</option>
+          </select>
+          <select id="statusFilter">
+            <option value="all">Tất cả trạng thái</option>
+            <option value="active">Đang hoạt động</option>
+            <option value="locked">Tạm khóa</option>
+          </select>
+          <button class="btn btn-secondary" id="refresh" type="button">Cập nhật</button>
+        </div>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Họ tên</th>
+              <th>Email đăng nhập</th>
+              <th>Vai trò</th>
+              <th>Đăng nhập</th>
+              <th>Liên kết</th>
+              <th>Trạng thái</th>
+              <th>Thao tác</th>
+            </tr>
+          </thead>
+          <tbody id="accountRows"></tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="dialog" id="staffDialog">
+    <form id="staffForm">
+      <div class="dialog-head">
+        <h2>Thêm nhân viên</h2>
+        <button class="btn btn-secondary" type="button" data-close>Đóng</button>
+      </div>
+      <div class="dialog-grid">
+        <label class="field"><span>Họ tên nhân viên</span><input name="name" required placeholder="Nhập họ tên"></label>
+        <label class="field"><span>Email/Gmail</span><input name="email" type="email" required placeholder="Nhập email"></label>
+      </div>
+      <div class="auth-login-section">
+        <div class="field auth-method-field">
+          <span>Phương thức đăng nhập</span>
+          <div class="auth-method-options" role="radiogroup" aria-label="Phương thức đăng nhập">
+            <label class="auth-method-option">
+              <input type="radio" name="authMethod" value="google" checked>
+              <span>Google</span>
+            </label>
+            <label class="auth-method-option">
+              <input type="radio" name="authMethod" value="both">
+              <span>Google + Tài khoản</span>
+            </label>
+          </div>
+        </div>
+        <div class="login-fields" id="staffLoginFields" hidden>
+          <label class="field"><span>Tên đăng nhập</span><input name="username" placeholder="Nhập tên đăng nhập" autocomplete="username"></label>
+          <label class="field password-field"><span>Mật khẩu</span><input name="password" type="password" placeholder="Nhập mật khẩu" autocomplete="new-password"><button type="button" class="password-eye" id="staffPasswordToggle" aria-label="Hiện mật khẩu"><i class="fa-regular fa-eye"></i></button></label>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-primary">Lưu nhân viên</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="../js/smartroom-layout.js?v=101"></script>
+  <script type="module">
+    import {
+      loadStoreWithFirebase,
+      saveStore,
+      roleText,
+      statusBadge,
+      tenantById,
+      roomById,
+      nextId,
+      accountByEmail,
+      addActivityLog,
+      syncFirebaseUpdates,
+      firebaseWriteError
+    } from "../js/smartroom-store.js?v=101";
+
+    const store = await loadStoreWithFirebase();
+    const search = document.getElementById("search");
+    const roleFilter = document.getElementById("roleFilter");
+    const statusFilter = document.getElementById("statusFilter");
+    const staffDialog = document.getElementById("staffDialog");
+    const staffForm = document.getElementById("staffForm");
+    const staffLoginFields = document.getElementById("staffLoginFields");
+    const staffUsernameInput = staffForm.querySelector('input[name="username"]');
+    const staffPasswordInput = staffForm.querySelector('input[name="password"]');
+
+    function methodText(method) {
+      if (method === "password") return "Google + Tài khoản";
+      if (method === "both") return "Google + Tài khoản";
+      return "Google";
+    }
+
+    function firebaseKeyFromEmail(email = "") {
+      return String(email || "").trim().toLowerCase().replace(/[.#$/\[\]@]/g, "_");
+    }
+
+    function allowedUserFromAccount(account) {
+      if (!account?.email) return null;
+      const redirect = account.role === "tenant" ? "pages/tenant.html" : "pages/dashboard.html";
+      return {
+        id: account.id,
+        name: account.name,
+        email: account.email,
+        role: account.role,
+        status: account.status,
+        active: account.status === "active",
+        tenantId: account.tenantId || "",
+        roomId: account.roomId || "",
+        authMethod: account.authMethod || "google",
+        redirect
+      };
+    }
+
+    function syncStaffAuthFields() {
+      const method = staffForm.querySelector('input[name="authMethod"]:checked')?.value || "google";
+      const needsPasswordLogin = method === "both";
+      staffLoginFields.hidden = !needsPasswordLogin;
+      staffLoginFields.style.display = needsPasswordLogin ? "grid" : "none";
+      staffLoginFields.classList.toggle("is-visible", needsPasswordLogin);
+      staffUsernameInput.required = needsPasswordLogin;
+      staffPasswordInput.required = needsPasswordLogin;
+      if (!needsPasswordLogin) {
+        staffUsernameInput.value = "";
+        staffPasswordInput.value = "";
+      }
+    }
+
+    function renderStats() {
+      const active = store.accounts.filter((account) => account.status === "active").length;
+      const locked = store.accounts.filter((account) => account.status === "locked").length;
+      const managers = store.accounts.filter((account) => account.role === "manager").length;
+      const staffs = store.accounts.filter((account) => account.role === "staff").length;
+      const tenantAccounts = store.accounts.filter((account) => account.role === "tenant").length;
+      const items = [
+        ["blue", "fa-user-shield", "Tổng tài khoản", store.accounts.length, "Được cấp quyền"],
+        ["green", "fa-circle-check", "Đang hoạt động", active, "Có thể đăng nhập"],
+        ["red", "fa-user-lock", "Tạm khóa", locked, "Không thể đăng nhập"],
+        ["purple", "fa-users-gear", "Nhân viên", staffs, `Quản lý: ${managers} · Người thuê: ${tenantAccounts}`]
+      ];
+      document.getElementById("accountStats").innerHTML = items.map(([color, icon, label, value, note]) => `
+        <article class="card stat-card">
+          <div class="stat-icon ${color}"><i class="fa-solid ${icon}"></i></div>
+          <div><p class="stat-label">${label}</p><p class="stat-value">${value}</p><p class="stat-note">${note}</p></div>
+        </article>
+      `).join("");
+    }
+
+    function renderAccounts() {
+      const keyword = search.value.trim().toLowerCase();
+      const rows = store.accounts.filter((account) => {
+        const text = `${account.name} ${account.email} ${account.username || ""}`.toLowerCase();
+        return (!keyword || text.includes(keyword))
+          && (roleFilter.value === "all" || account.role === roleFilter.value)
+          && (statusFilter.value === "all" || account.status === statusFilter.value);
+      });
+
+      document.getElementById("accountRows").innerHTML = rows.map((account) => {
+        const tenant = tenantById(store, account.tenantId);
+        const room = roomById(store, account.roomId);
+        const link = tenant
+          ? `${tenant.name}<br><span class="muted">${room ? room.id : account.roomId || "Chưa có phòng"}</span>`
+          : account.role === "tenant"
+            ? `<span class="muted">Chưa gán phòng</span>`
+            : "-";
+        return `
+          <tr>
+            <td><strong>${account.name}</strong>${account.username ? `<br><span class="muted">TK: ${account.username}</span>` : ""}</td>
+            <td>${account.email}</td>
+            <td><span class="badge ${statusBadge(account.role)}">${roleText(account.role)}</span></td>
+            <td>${methodText(account.authMethod)}</td>
+            <td>${link}</td>
+            <td><span class="badge ${statusBadge(account.status)}">${account.status === "active" ? "Đang hoạt động" : "Tạm khóa"}</span></td>
+            <td class="actions">
+              <button class="btn btn-secondary" data-toggle="${account.id}">${account.status === "active" ? "Khóa" : "Mở khóa"}</button>
+            </td>
+          </tr>
+        `;
+      }).join("") || `<tr><td colspan="7">Không có tài khoản phù hợp.</td></tr>`;
+    }
+
+    function renderAll() {
+      renderStats();
+      renderAccounts();
+    }
+
+    document.getElementById("openStaffDialog").addEventListener("click", () => {
+      staffForm.reset();
+      syncStaffAuthFields();
+      staffDialog.showModal();
+    });
+
+    document.addEventListener("click", (event) => {
+      if (event.target.matches("[data-close]")) event.target.closest("dialog").close();
+      const button = event.target.closest("[data-toggle]");
+      if (!button) return;
+      const account = store.accounts.find((item) => item.id === button.dataset.toggle);
+      if (!account) return;
+      if (account.role === "manager" && account.status === "active") {
+        const activeManagers = store.accounts.filter((item) => item.role === "manager" && item.status === "active").length;
+        if (activeManagers <= 1) {
+          alert("Không thể khóa tài khoản quản lý đang hoạt động cuối cùng.");
+          return;
+        }
+      }
+      account.status = account.status === "active" ? "locked" : "active";
+      const log = addActivityLog(
+        store,
+        `${account.status === "active" ? "Mở khóa" : "Khóa"} tài khoản ${account.name}`,
+        `accounts/${account.id}`,
+        `${account.email} - ${account.role}`
+      );
+      saveStore(store);
+      renderAll();
+      const updates = {
+        [`accounts/${account.id}`]: account,
+        [`activityLogs/${log.id}`]: log
+      };
+      const allowedUser = allowedUserFromAccount(account);
+      if (allowedUser && ["manager", "staff", "tenant"].includes(account.role)) {
+        updates[`allowedUsers/${firebaseKeyFromEmail(account.email)}`] = allowedUser;
+      }
+      syncFirebaseUpdates(updates).catch(firebaseWriteError);
+    });
+
+    staffForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(staffForm));
+      const name = String(data.name || "").trim();
+      const email = String(data.email || "").trim().toLowerCase();
+      const authMethod = data.authMethod || "google";
+      const wantsPasswordLogin = authMethod === "both";
+      const username = String(data.username || "").trim();
+      const password = String(data.password || "").trim();
+
+      if (!name || !email) {
+        alert("Vui lòng nhập đầy đủ họ tên và email nhân viên.");
+        return;
+      }
+      const existingAccount = accountByEmail(store, email);
+      if (existingAccount) {
+        alert("Email này đã có tài khoản trong hệ thống.");
+        return;
+      }
+      if (wantsPasswordLogin && (!username || !password)) {
+        alert("Vui lòng nhập tên đăng nhập và mật khẩu khi chọn Google + Tài khoản.");
+        return;
+      }
+      if (wantsPasswordLogin) {
+        const usernameExists = store.accounts.some((account) => account.username && account.username.toLowerCase() === username.toLowerCase());
+        if (usernameExists) {
+          alert("Tên đăng nhập này đã tồn tại. Hãy chọn tên khác.");
+          return;
+        }
+      }
+
+      const account = {
+        id: nextId("A", store.accounts),
+        name,
+        email,
+        role: "staff",
+        status: "active",
+        tenantId: "",
+        roomId: "",
+        authMethod,
+        username: wantsPasswordLogin ? username : "",
+        password: wantsPasswordLogin ? password : ""
+      };
+      store.accounts.push(account);
+      const log = addActivityLog(
+        store,
+        `Thêm nhân viên ${account.name}`,
+        `accounts/${account.id}`,
+        `${account.email} - ${authMethod === "both" ? "Google + Tài khoản" : "Google"}`
+      );
+      saveStore(store);
+      staffForm.reset();
+      syncStaffAuthFields();
+      staffDialog.close();
+      renderAll();
+      try {
+        await syncFirebaseUpdates({
+          [`accounts/${account.id}`]: account,
+          [`allowedUsers/${firebaseKeyFromEmail(account.email)}`]: allowedUserFromAccount(account),
+          [`activityLogs/${log.id}`]: log
+        });
+      } catch (error) {
+        firebaseWriteError(error);
+      }
+    });
+
+    staffForm.querySelectorAll('input[name="authMethod"]').forEach((input) => {
+      input.addEventListener("change", syncStaffAuthFields);
+    });
+
+    document.getElementById("staffPasswordToggle")?.addEventListener("click", () => {
+      const show = staffPasswordInput.type === "password";
+      staffPasswordInput.type = show ? "text" : "password";
+      const icon = document.querySelector("#staffPasswordToggle i");
+      if (icon) icon.className = show ? "fa-regular fa-eye-slash" : "fa-regular fa-eye";
+    });
+
+    [search, roleFilter, statusFilter].forEach((control) => control.addEventListener("input", renderAccounts));
+    document.getElementById("refresh").addEventListener("click", renderAll);
+    syncStaffAuthFields();
+    renderAll();
+  </script>
+</body>
+</html>

@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard | SmartRoom</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="../css/smartroom.css?v=101">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand"><i class="fa-solid fa-house-signal"></i><span>SmartRoom</span></div>
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Thu gọn"><i class="fa-solid fa-bars"></i></button>
+      </div>
+      <nav class="menu">
+        <a class="active" href="dashboard.html"><i class="fa-solid fa-table-columns"></i><span>Dashboard</span></a>
+        <a href="rooms.html"><i class="fa-solid fa-building"></i><span>Phòng</span></a>
+        <a href="tenants.html"><i class="fa-solid fa-users"></i><span>Người thuê</span></a>
+        <a href="accounts.html"><i class="fa-solid fa-user-shield"></i><span>Tài khoản</span></a>
+      </nav>
+      <button class="logout-btn" id="logoutBtn" type="button"><i class="fa-solid fa-right-from-bracket"></i><span>Đăng xuất</span></button>
+    </aside>
+
+    <main class="main">
+      <header class="page-head">
+        <h1>Dashboard</h1>
+        <select id="monthSelect" class="month-select">
+          <option value="2026-07">Tháng 07/2026</option>
+          <option value="2026-06">Tháng 06/2026</option>
+          <option value="2026-05">Tháng 05/2026</option>
+        </select>
+      </header>
+
+      <section class="stats-grid" id="stats"></section>
+
+      <section class="content-grid">
+        <article class="card">
+          <div class="card-head"><h2>Tình trạng phòng</h2></div>
+          <div id="occupancy"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head"><h2>Thu chi tháng này</h2></div>
+          <div class="finance-section" id="finance"></div>
+          <div class="rate-form">
+            <label class="rate-input">
+              <span>Đơn giá điện</span>
+              <input id="electricRate" type="number">
+            </label>
+            <label class="rate-input">
+              <span>Đơn giá nước</span>
+              <input id="waterRate" type="number">
+            </label>
+            <label class="rate-input">
+              <span>Chi phí bảo trì</span>
+              <input id="maintenanceCost" type="number">
+            </label>
+            <button class="btn btn-primary" id="saveRates">Lưu</button>
+          </div>
+        </article>
+      </section>
+
+      <section class="wide-grid">
+        <article class="card">
+          <div class="card-head">
+            <h2>Yêu cầu cần xử lý</h2>
+            <span class="badge badge-yellow" id="requestCount"></span>
+          </div>
+          <div class="list" id="requestList"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head"><h2>Hạ tầng phòng trọ</h2></div>
+          <div class="infra-list" id="infrastructure"></div>
+        </article>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Lịch sử thao tác</h2></div>
+        <div id="activityList"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Phòng cần chú ý</h2></div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Phòng</th>
+              <th>Người thuê</th>
+              <th>Giá thuê</th>
+              <th>Điện</th>
+              <th>Nước</th>
+              <th>Ghi chú</th>
+            </tr>
+          </thead>
+          <tbody id="attentionRooms"></tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="../js/smartroom-layout.js?v=101"></script>
+  <script type="module">
+    import {
+      loadStore,
+      loadStoreWithFirebase,
+      saveStore,
+      money,
+      currentRates,
+      dashboardSummary,
+      roomBill,
+      tenantById,
+      requestsByRoom,
+      paymentStatusText,
+      systemActivityLogs,
+      addActivityLog,
+      syncFirebaseUpdates,
+      firebaseWriteError
+    } from "../js/smartroom-store.js?v=101";
+
+    const store = await loadStoreWithFirebase();
+    const monthSelect = document.getElementById("monthSelect");
+    const electricRate = document.getElementById("electricRate");
+    const waterRate = document.getElementById("waterRate");
+    const maintenanceCost = document.getElementById("maintenanceCost");
+
+    function timeOptions(value) {
+      const options = [];
+      for (let hour = 0; hour < 24; hour += 1) {
+        for (const minute of ["00", "30"]) {
+          const time = `${String(hour).padStart(2, "0")}:${minute}`;
+          options.push(`<option value="${time}" ${time === value ? "selected" : ""}>${time}</option>`);
+        }
+      }
+      return options.join("");
+    }
+
+    function lightingStatus(start, end) {
+      const now = new Date();
+      const current = now.getHours() * 60 + now.getMinutes();
+      const [startHour, startMinute] = String(start || "18:00").split(":").map(Number);
+      const [endHour, endMinute] = String(end || "05:30").split(":").map(Number);
+      const startValue = startHour * 60 + startMinute;
+      const endValue = endHour * 60 + endMinute;
+      const active = startValue <= endValue
+        ? current >= startValue && current < endValue
+        : current >= startValue || current < endValue;
+      return active ? "Đang bật" : "Đang tắt";
+    }
+
+    function renderStats(summary) {
+      const items = [
+        ["blue", "fa-building", "Tổng phòng", summary.totalRooms, `${summary.maintenance} phòng bảo trì`],
+        ["green", "fa-user-check", "Đang thuê", summary.occupied, `${summary.totalRooms ? Math.round(summary.occupied / summary.totalRooms * 100) : 0}% tổng phòng`],
+        ["orange", "fa-door-open", "Phòng trống", summary.vacant, "Có thể cho thuê"],
+        ["red", "fa-clock", "Chậm thanh toán", summary.late, "Quá hạn trong tháng"]
+      ];
+
+      document.getElementById("stats").innerHTML = items.map(([color, icon, label, value, note]) => `
+        <article class="card stat-card">
+          <div class="stat-icon ${color}"><i class="fa-solid ${icon}"></i></div>
+          <div>
+            <p class="stat-label">${label}</p>
+            <p class="stat-value">${value}</p>
+            <p class="stat-note">${note}</p>
+          </div>
+        </article>
+      `).join("");
+    }
+
+    function renderOccupancy(summary) {
+      const total = summary.totalRooms || 1;
+      const occupiedEnd = summary.occupied / total * 100;
+      const vacantEnd = (summary.occupied + summary.vacant) / total * 100;
+
+      document.getElementById("occupancy").innerHTML = `
+        <div class="occupancy">
+          <div class="ring" style="--occupied:${occupiedEnd}%;--vacant:${vacantEnd}%">
+            <div class="ring-inner"><span><strong>${Math.round(occupiedEnd)}%</strong>đã thuê</span></div>
+          </div>
+          <div class="legend">
+            <div class="legend-row"><span><i class="dot" style="background:#16a34a"></i>Đang thuê</span><strong>${summary.occupied}</strong></div>
+            <div class="legend-row"><span><i class="dot" style="background:#f59e0b"></i>Phòng trống</span><strong>${summary.vacant}</strong></div>
+            <div class="legend-row"><span><i class="dot" style="background:#e23a3a"></i>Bảo trì</span><strong>${summary.maintenance}</strong></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderFinance(summary) {
+      document.getElementById("finance").innerHTML = `
+        <div class="finance-row">
+          <div class="finance-box"><span>Tiền điện</span><strong>${money(summary.electricFee)}</strong></div>
+          <div class="finance-box"><span>Tiền nước</span><strong>${money(summary.waterFee)}</strong></div>
+          <div class="finance-box"><span>Chi phí bảo trì</span><strong>${money(summary.maintenanceCost)}</strong></div>
+        </div>
+        <div class="finance-row">
+          <div class="finance-box"><span>Đã thu</span><strong>${money(summary.paid)}</strong></div>
+          <div class="finance-box"><span>Chưa thu</span><strong>${money(summary.unpaid)}</strong></div>
+          <div class="finance-box"><span>Còn lại</span><strong>${money(summary.remain)}</strong></div>
+        </div>
+      `;
+    }
+
+    function renderRequests(summary) {
+      document.getElementById("requestCount").textContent = `${summary.openRequests.length} yêu cầu`;
+      document.getElementById("requestList").innerHTML = summary.openRequests.length ? summary.openRequests.map((request) => `
+        <div class="list-item">
+          <div class="mini-icon red"><i class="fa-solid fa-screwdriver-wrench"></i></div>
+          <div>
+            <p class="item-title">${request.roomId} - ${request.title}</p>
+            <p class="item-sub">${request.createdAt}</p>
+          </div>
+          <a class="badge badge-blue" href="rooms.html?room=${request.roomId}">Chi tiết</a>
+        </div>
+      `).join("") : `<p class="muted">Không có yêu cầu đang mở.</p>`;
+    }
+
+    function renderInfrastructure() {
+      const infra = store.infrastructure;
+      const lighting = infra.lighting || {};
+      if (!lighting.start || !lighting.end) {
+        const parts = String(lighting.schedule || "18:00 - 05:30").split("-");
+        lighting.start = (parts[0] || "18:00").trim();
+        lighting.end = (parts[1] || "05:30").trim();
+        lighting.status = lighting.status || "Đang bật";
+        store.infrastructure.lighting = lighting;
+        saveStore(store);
+      }
+      lighting.status = lightingStatus(lighting.start, lighting.end);
+      document.getElementById("infrastructure").innerHTML = `
+        <div class="infra-item">
+          <div class="infra-icon water"><i class="fa-solid fa-droplet"></i></div>
+          <div class="infra-content">
+            <h3>Bồn nước mái</h3>
+            <p>Mức nước hiện tại: <strong>${infra.waterTank.level}%</strong></p>
+            <span>Còn lại: ${infra.waterTank.current} / ${infra.waterTank.capacity} m³</span>
+          </div>
+        </div>
+        <div class="infra-item">
+          <div class="infra-icon light"><i class="fa-solid fa-lightbulb"></i></div>
+          <div class="infra-content">
+            <h3>Chiếu sáng khu chung</h3>
+            <p>Hẹn giờ: <strong>${lighting.start} - ${lighting.end}</strong></p>
+            <span>Trạng thái: ${lighting.status}</span>
+          </div>
+        </div>
+        <div class="infra-item">
+          <div class="infra-icon power"><i class="fa-solid fa-bolt"></i></div>
+          <div class="infra-content">
+            <h3>Điện tổng</h3>
+            <p>Công suất tức thời: <strong>${infra.power.currentKw} kW</strong></p>
+            <span>Tải hệ thống: ${infra.power.load}</span>
+          </div>
+        </div>
+        <div class="light-form">
+          <label class="rate-input">
+            <span>Giờ bật đèn</span>
+            <select id="lightStart">${timeOptions(lighting.start)}</select>
+          </label>
+          <label class="rate-input">
+            <span>Giờ tắt đèn</span>
+            <select id="lightEnd">${timeOptions(lighting.end)}</select>
+          </label>
+          <button class="btn btn-primary" id="saveLighting" type="button">Lưu lịch đèn</button>
+        </div>
+      `;
+
+      document.getElementById("saveLighting").addEventListener("click", () => {
+        store.infrastructure.lighting.start = document.getElementById("lightStart").value || "18:00";
+        store.infrastructure.lighting.end = document.getElementById("lightEnd").value || "05:30";
+        store.infrastructure.lighting.status = lightingStatus(store.infrastructure.lighting.start, store.infrastructure.lighting.end);
+        const log = addActivityLog(
+          store,
+          "Cập nhật lịch đèn khu chung",
+          "infrastructure/lighting",
+          `${store.infrastructure.lighting.start} - ${store.infrastructure.lighting.end}`
+        );
+        saveStore(store);
+        renderInfrastructure();
+        renderActivityLogs();
+        syncFirebaseUpdates({
+          "infrastructure/lighting": store.infrastructure.lighting,
+          [`activityLogs/${log.id}`]: log
+        }).catch(firebaseWriteError);
+      });
+    }
+
+    function renderAttentionRooms() {
+      const rooms = store.rooms
+        .filter((room) => room.status === "maintenance" || requestsByRoom(store, room.id).length || room.paymentStatus === "late")
+        .slice(0, 5);
+
+      document.getElementById("attentionRooms").innerHTML = rooms.map((room) => {
+        const tenant = tenantById(store, room.tenantId);
+        const bill = roomBill(store, room);
+        const requestCount = requestsByRoom(store, room.id).length;
+        const note = room.status === "maintenance" ? "Đang bảo trì" : requestCount ? `${requestCount} yêu cầu đang mở` : paymentStatusText(room.paymentStatus);
+        return `
+          <tr>
+            <td>${room.id}</td>
+            <td>${tenant ? tenant.name : "-"}</td>
+            <td>${money(room.rent)}</td>
+            <td>${room.electricUsage} kWh<br><span class="muted">${money(bill.electricFee)}</span></td>
+            <td>${room.waterUsage} m³<br><span class="muted">${money(bill.waterFee)}</span></td>
+            <td>${note}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function renderActivityLogs() {
+      const logs = systemActivityLogs(store).slice(0, 15);
+      const roleLabel = { manager: "Quản lý", tenant: "Người thuê" };
+      const roleBadge = { manager: "badge-blue", tenant: "badge-green" };
+      document.getElementById("activityList").innerHTML = logs.length ? `
+        <table class="table activity-table">
+          <thead>
+            <tr>
+              <th>Thời gian</th>
+              <th>Người thao tác</th>
+              <th>Quyền</th>
+              <th>Hành động</th>
+              <th>Chi tiết</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${logs.map((log) => `
+              <tr>
+                <td>${log.time || "-"}</td>
+                <td><strong>${log.actorName || "-"}</strong></td>
+                <td><span class="badge ${roleBadge[log.role] || "badge-gray"}">${roleLabel[log.role] || log.role || "-"}</span></td>
+                <td>${log.action || "-"}</td>
+                <td>${log.detail || log.target || "-"}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      ` : `<p class="muted">Chưa có thao tác nào.</p>`;
+    }
+
+    function loadRatesToForm() {
+      store.month = monthSelect.value;
+      const rates = currentRates(store);
+      electricRate.value = rates.electricRate;
+      waterRate.value = rates.waterRate;
+      maintenanceCost.value = rates.maintenanceCost;
+    }
+
+    function render() {
+      loadRatesToForm();
+      const summary = dashboardSummary(store);
+      renderStats(summary);
+      renderOccupancy(summary);
+      renderFinance(summary);
+      renderRequests(summary);
+      renderInfrastructure();
+      renderAttentionRooms();
+      renderActivityLogs();
+    }
+
+    monthSelect.value = store.month;
+    monthSelect.addEventListener("change", () => {
+      store.month = monthSelect.value;
+      const log = addActivityLog(store, `Đổi kỳ xem Dashboard`, "dashboard/month", `Chọn tháng ${store.month}`);
+      saveStore(store);
+      render();
+      syncFirebaseUpdates({
+        month: store.month,
+        [`activityLogs/${log.id}`]: log
+      }).catch(firebaseWriteError);
+    });
+
+    document.getElementById("saveRates").addEventListener("click", () => {
+      const rates = currentRates(store);
+      rates.electricRate = Number(electricRate.value || 0);
+      rates.waterRate = Number(waterRate.value || 0);
+      rates.maintenanceCost = Number(maintenanceCost.value || 0);
+      const log = addActivityLog(
+        store,
+        "Cập nhật đơn giá thu chi",
+        `rates/${store.month}`,
+        `Điện ${money(rates.electricRate)}, nước ${money(rates.waterRate)}, bảo trì ${money(rates.maintenanceCost)}`
+      );
+      saveStore(store);
+      render();
+      syncFirebaseUpdates({
+        [`rates/${store.month}`]: rates,
+        month: store.month,
+        [`activityLogs/${log.id}`]: log
+      }).catch(firebaseWriteError);
+    });
+
+    render();
+  </script>
+</body>
+</html>

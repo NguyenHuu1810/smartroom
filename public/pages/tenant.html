@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Người thuê | SmartRoom</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="../css/smartroom.css?v=101">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand"><i class="fa-solid fa-house-signal"></i><span>SmartRoom</span></div>
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Thu gọn"><i class="fa-solid fa-bars"></i></button>
+      </div>
+      <nav class="menu">
+        <a class="active" href="#dashboard" data-tenant-page="dashboard"><i class="fa-solid fa-house-user"></i><span>Dashboard</span></a>
+        <a href="#invoice" data-tenant-page="invoice"><i class="fa-solid fa-receipt"></i><span>Hóa đơn</span></a>
+      </nav>
+      <button class="logout-btn" id="logoutBtn" type="button"><i class="fa-solid fa-right-from-bracket"></i><span>Đăng xuất</span></button>
+    </aside>
+
+    <main class="main">
+      <header class="page-head">
+        <h1 id="tenantTitle">Phòng của tôi</h1>
+        <button class="btn btn-primary" id="openRequestDialog"><i class="fa-solid fa-paper-plane"></i> Gửi yêu cầu</button>
+      </header>
+
+      <section id="tenantDashboard" data-page="dashboard">
+        <section class="stats-grid" id="tenantMetrics"></section>
+
+        <section class="wide-grid">
+          <article class="card">
+            <div class="card-head"><h2>Yêu cầu của tôi</h2></div>
+            <div class="list" id="myRequests"></div>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h2>Thông tin thuê phòng</h2></div>
+            <div class="detail-grid compact-detail" id="tenantProfile"></div>
+          </article>
+        </section>
+
+        <section class="card">
+          <div class="card-head"><h2>Điều khiển thiết bị</h2></div>
+          <div class="device-grid" id="tenantDevices"></div>
+        </section>
+
+        <section class="card control-history-card">
+          <div class="card-head"><h2>Lịch sử điều khiển</h2></div>
+          <div class="list" id="controlLogs"></div>
+        </section>
+      </section>
+
+      <section id="tenantInvoice" data-page="invoice" hidden>
+        <section class="card">
+          <div class="card-head">
+            <h2>Hóa đơn tháng này</h2>
+            <button class="btn btn-primary" id="paymentButton" type="button">Thanh toán</button>
+          </div>
+          <div class="invoice-layout">
+            <div class="finance-section" id="billBox"></div>
+            <div class="invoice-summary" id="invoiceSummary"></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="card" id="unlinkedBox" hidden>
+        <div class="card-head"><h2>Thông tin thuê phòng</h2></div>
+        <p class="muted">Tài khoản này chưa được gắn với phòng thuê.</p>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="dialog" id="requestDialog">
+    <form id="requestForm">
+      <div class="dialog-head">
+        <h2>Gửi yêu cầu</h2>
+        <button class="btn btn-secondary" type="button" data-close>Đóng</button>
+      </div>
+      <label class="field"><span>Tiêu đề</span><input name="title" placeholder="Ví dụ: Nước yếu" required></label>
+      <label class="field"><span>Nội dung</span><textarea name="detail" required></textarea></label>
+      <div class="dialog-actions">
+        <button class="btn btn-primary">Gửi</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="../js/smartroom-layout.js?v=101"></script>
+  <script type="module">
+    import {
+      loadStore,
+      loadStoreWithFirebase,
+      saveStore,
+      money,
+      sensorText,
+      nextId,
+      roomById,
+      roomBill,
+      currentRates,
+      requestStatusText,
+      statusBadge,
+      paymentStatusText,
+      tenantForAuthUser,
+      roomDevices,
+      roomControlLogs,
+      deviceStatusText,
+      addControlLog,
+      addActivityLog,
+      syncFirebaseUpdates,
+      firebaseWriteError
+    } from "../js/smartroom-store.js?v=101";
+
+    const store = await loadStoreWithFirebase();
+    const tenant = tenantForAuthUser(store);
+    const room = tenant ? roomById(store, tenant.roomId) : null;
+    const requestDialog = document.getElementById("requestDialog");
+    const openRequestButton = document.getElementById("openRequestDialog");
+    let activePage = location.hash === "#invoice" ? "invoice" : "dashboard";
+
+    function showTenantPage(page) {
+      activePage = page === "invoice" ? "invoice" : "dashboard";
+      document.querySelectorAll("[data-page]").forEach((section) => {
+        section.hidden = section.dataset.page !== activePage;
+      });
+      document.querySelectorAll("[data-tenant-page]").forEach((link) => {
+        link.classList.toggle("active", link.dataset.tenantPage === activePage);
+      });
+      document.getElementById("tenantTitle").textContent = activePage === "invoice"
+        ? "Hóa đơn"
+        : room ? `Phòng của tôi - ${room.id}` : "Phòng của tôi";
+    }
+
+    function optionRange(start, end, value, suffix = "") {
+      const options = [];
+      for (let number = start; number <= end; number += 1) {
+        options.push(`<option value="${number}" ${Number(value) === number ? "selected" : ""}>${number}${suffix}</option>`);
+      }
+      return options.join("");
+    }
+
+    function deviceModeText(mode) {
+      return { cool: "Làm lạnh", dry: "Hút ẩm", fan: "Quạt gió", auto: "Tự động" }[mode] || mode;
+    }
+
+    function deviceCard(device) {
+      if (device.type === "door") {
+        return `
+          <article class="device-card smart-device-card">
+            <div class="device-head">
+              <div><p class="device-type">Khóa cửa</p><h3>${device.name}</h3></div>
+              <span class="badge ${device.state === "locked" ? "badge-green" : "badge-yellow"}">${deviceStatusText(device)}</span>
+            </div>
+            <div class="door-state ${device.state === "locked" ? "locked" : "unlocked"}">
+              <i class="fa-solid ${device.state === "locked" ? "fa-lock" : "fa-lock-open"}"></i>
+              <strong>${device.state === "locked" ? "Đang khóa" : "Đang mở"}</strong>
+            </div>
+            <div class="actions">
+              <button class="btn btn-secondary" data-door="${device.id}" data-state="locked" type="button">Khóa cửa</button>
+              <button class="btn btn-primary" data-door="${device.id}" data-state="unlocked" type="button">Mở khóa</button>
+            </div>
+          </article>
+        `;
+      }
+
+      if (device.type === "fan") {
+        return `
+          <article class="device-card smart-device-card">
+            <div class="device-head">
+              <div><p class="device-type">Quạt trần</p><h3>${device.name}</h3></div>
+              <button class="power-switch ${device.power ? "on" : ""}" data-power="${device.id}" type="button"><span></span></button>
+            </div>
+            <p class="device-status">${deviceStatusText(device)}</p>
+            <div class="speed-buttons">
+              ${[1, 2, 3].map((speed) => `<button class="${Number(device.speed || 1) === speed && device.power ? "active" : ""}" data-fan-set="${device.id}" data-speed="${speed}" type="button">Mức ${speed}</button>`).join("")}
+            </div>
+          </article>
+        `;
+      }
+
+      if (device.type === "ac") {
+        return `
+          <article class="device-card smart-device-card ac-card">
+            <div class="device-head">
+              <div><p class="device-type">Máy lạnh</p><h3>${device.name}</h3></div>
+              <button class="power-switch ${device.power ? "on" : ""}" data-power="${device.id}" type="button"><span></span></button>
+            </div>
+            <div class="thermostat">
+              <button class="round-btn" data-ac-step="${device.id}" data-step="-1" type="button">-</button>
+              <strong>${device.temp || 26}°C</strong>
+              <button class="round-btn" data-ac-step="${device.id}" data-step="1" type="button">+</button>
+            </div>
+            <div class="device-controls ac-controls">
+              <label class="field"><span>Chế độ</span>
+                <select data-ac-mode="${device.id}">
+                  ${["cool", "dry", "fan", "auto"].map((mode) => `<option value="${mode}" ${device.mode === mode ? "selected" : ""}>${deviceModeText(mode)}</option>`).join("")}
+                </select>
+              </label>
+              <label class="field"><span>Tốc độ gió</span>
+                <select data-ac-fan="${device.id}">
+                  ${["auto", "low", "medium", "high"].map((speed) => `<option value="${speed}" ${device.fanSpeed === speed ? "selected" : ""}>${{ auto: "Tự động", low: "Thấp", medium: "Vừa", high: "Cao" }[speed]}</option>`).join("")}
+                </select>
+              </label>
+            </div>
+          </article>
+        `;
+      }
+
+      return `
+        <article class="device-card smart-device-card">
+          <div class="device-head">
+            <div><p class="device-type">Đèn trần</p><h3>${device.name}</h3></div>
+            <button class="power-switch ${device.power ? "on" : ""}" data-power="${device.id}" type="button"><span></span></button>
+          </div>
+          <p class="device-status">${deviceStatusText(device)}</p>
+        </article>
+      `;
+    }
+
+    function renderDevices() {
+      if (!room) return;
+      const devices = roomDevices(store, room.id);
+      document.getElementById("tenantDevices").innerHTML = devices.length
+        ? devices.map(deviceCard).join("")
+        : `<p class="muted">Phòng này chưa được chủ trọ gán thiết bị thông minh.</p>`;
+
+      const logs = roomControlLogs(store, room.id).slice(0, 8);
+      document.getElementById("controlLogs").innerHTML = logs.length ? logs.map((log) => `
+        <div class="list-item">
+          <div class="mini-icon blue"><i class="fa-solid fa-clock-rotate-left"></i></div>
+          <div><p class="item-title">${log.action}</p><p class="item-sub">${log.deviceName} · ${log.by} · ${log.time}</p></div>
+          <span class="badge badge-gray">${log.role === "tenant" ? "Người thuê" : "Quản lý"}</span>
+        </div>
+      `).join("") : `<p class="muted">Chưa có lịch sử điều khiển.</p>`;
+    }
+
+    async function saveDeviceChange(device, action) {
+      const userName = tenant?.name || "Người thuê";
+      const log = addControlLog(store, room.id, {
+        deviceId: device.id,
+        deviceName: device.name,
+        action,
+        by: userName,
+        role: "tenant"
+      });
+      saveStore(store);
+      renderDevices();
+      try {
+        await syncFirebaseUpdates({
+          [`devices/${room.id}/${device.id}`]: device,
+          [`controlLogs/${room.id}/${log.id}`]: log
+        });
+      } catch (error) {
+        firebaseWriteError(error);
+      }
+    }
+
+    function render() {
+      if (!tenant || !room) {
+        document.getElementById("tenantTitle").textContent = "Phòng của tôi";
+        document.getElementById("unlinkedBox").hidden = false;
+        document.getElementById("tenantDashboard").hidden = true;
+        document.getElementById("tenantInvoice").hidden = true;
+        openRequestButton.disabled = true;
+        openRequestButton.title = "Tài khoản chưa được gắn với phòng thuê";
+        return;
+      }
+
+      openRequestButton.disabled = false;
+      openRequestButton.title = "";
+      const paymentButton = document.getElementById("paymentButton");
+      if (paymentButton) {
+        paymentButton.disabled = room.paymentStatus === "paid";
+        paymentButton.textContent = room.paymentStatus === "paid" ? "Đã thanh toán" : "Thanh toán";
+        paymentButton.title = room.paymentStatus === "paid" ? "Hóa đơn tháng này đã thanh toán" : "Gửi xác nhận thanh toán ở bước sau";
+      }
+
+      const bill = roomBill(store, room);
+      const rates = currentRates(store);
+      const amountDue = room.paymentStatus === "paid" ? 0 : bill.total;
+      document.getElementById("tenantMetrics").innerHTML = `
+        <article class="card stat-card">
+          <div class="stat-icon blue"><i class="fa-solid fa-temperature-half"></i></div>
+          <div><p class="stat-label">Nhiệt độ</p><p class="stat-value">${sensorText(room.temperature, "°C")}</p></div>
+        </article>
+        <article class="card stat-card">
+          <div class="stat-icon green"><i class="fa-solid fa-droplet"></i></div>
+          <div><p class="stat-label">Độ ẩm</p><p class="stat-value">${sensorText(room.humidity, "%")}</p></div>
+        </article>
+        <article class="card stat-card">
+          <div class="stat-icon orange"><i class="fa-solid fa-bolt"></i></div>
+          <div><p class="stat-label">Điện tiêu thụ</p><p class="stat-value">${room.electricUsage}</p><p class="stat-note">kWh</p></div>
+        </article>
+        <article class="card stat-card">
+          <div class="stat-icon blue"><i class="fa-solid fa-faucet-drip"></i></div>
+          <div><p class="stat-label">Nước tiêu thụ</p><p class="stat-value">${room.waterUsage}</p><p class="stat-note">m³</p></div>
+        </article>
+      `;
+
+      document.getElementById("billBox").innerHTML = `
+        <div class="finance-row">
+          <div class="finance-box"><span>Tiền phòng</span><strong>${money(bill.rent)}</strong></div>
+          <div class="finance-box"><span>Tiền điện</span><strong>${money(bill.electricFee)}</strong><small>${room.electricUsage} kWh x ${money(rates.electricRate)}</small></div>
+          <div class="finance-box"><span>Tiền nước</span><strong>${money(bill.waterFee)}</strong><small>${room.waterUsage} m³ x ${money(rates.waterRate)}</small></div>
+        </div>
+        <div class="finance-row">
+          <div class="finance-box"><span>Tổng tiền</span><strong>${money(bill.total)}</strong></div>
+          <div class="finance-box"><span>Hạn đóng</span><strong>${room.dueDate || "-"}</strong></div>
+          <div class="finance-box"><span>Trạng thái</span><strong>${paymentStatusText(room.paymentStatus)}</strong></div>
+        </div>
+      `;
+
+      document.getElementById("invoiceSummary").innerHTML = `
+        <div class="invoice-total">
+          <span>Cần thanh toán</span>
+          <strong>${money(amountDue)}</strong>
+        </div>
+        <div class="invoice-lines">
+          <div><span>Điện đầu kỳ</span><strong>${room.electricStart} kWh</strong></div>
+          <div><span>Điện hiện tại</span><strong>${room.electricCurrent} kWh</strong></div>
+          <div><span>Điện tiêu thụ</span><strong>${room.electricUsage} kWh</strong></div>
+          <div><span>Nước đầu kỳ</span><strong>${room.waterStart} m³</strong></div>
+          <div><span>Nước hiện tại</span><strong>${room.waterCurrent} m³</strong></div>
+          <div><span>Nước tiêu thụ</span><strong>${room.waterUsage} m³</strong></div>
+          <div><span>Kỳ hóa đơn</span><strong>${store.month}</strong></div>
+          <div><span>Phòng</span><strong>${room.id}</strong></div>
+        </div>
+      `;
+
+      const myRequests = store.requests.filter((request) => request.tenantId === tenant.id);
+      document.getElementById("myRequests").innerHTML = myRequests.length ? myRequests.map((request) => `
+        <div class="list-item">
+          <div class="mini-icon orange"><i class="fa-solid fa-message"></i></div>
+          <div><p class="item-title">${request.title}</p><p class="item-sub">${request.createdAt}</p></div>
+          <span class="badge ${statusBadge(request.status)}">${requestStatusText(request.status)}</span>
+        </div>
+      `).join("") : `<p class="muted">Chưa có yêu cầu nào.</p>`;
+
+      document.getElementById("tenantProfile").innerHTML = `
+        <div class="info-box"><span>Họ tên</span><strong>${tenant.name}</strong></div>
+        <div class="info-box"><span>Số điện thoại</span><strong>${tenant.phone}</strong></div>
+        <div class="info-box"><span>Email</span><strong>${tenant.email || "-"}</strong></div>
+        <div class="info-box"><span>Phòng</span><strong>${room.id} · ${room.building}</strong></div>
+        <div class="info-box"><span>Ngày vào</span><strong>${tenant.startDate}</strong></div>
+        <div class="info-box"><span>Tiền cọc</span><strong>${money(tenant.deposit)}</strong></div>
+      `;
+      renderDevices();
+      showTenantPage(activePage);
+    }
+
+    openRequestButton.addEventListener("click", () => {
+      if (!tenant || !room) return;
+      requestDialog.showModal();
+    });
+
+    document.getElementById("paymentButton")?.addEventListener("click", () => {
+      if (!tenant || !room || room.paymentStatus === "paid") return;
+      alert("Chức năng thanh toán trực tuyến chưa kết nối. Người thuê có thể chuyển khoản hoặc gửi yêu cầu cho quản lý xác nhận thanh toán.");
+    });
+    document.addEventListener("click", (event) => {
+      if (event.target.matches("[data-close]")) event.target.closest("dialog").close();
+    });
+
+    document.getElementById("requestForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!tenant || !room) return;
+      const data = Object.fromEntries(new FormData(event.currentTarget));
+      const request = {
+        id: nextId("R", store.requests),
+        roomId: room.id,
+        tenantId: tenant.id,
+        title: data.title.trim(),
+        detail: data.detail.trim(),
+        status: "new",
+        createdAt: new Date().toLocaleString("vi-VN")
+      };
+      store.requests.push(request);
+      const activityLog = addActivityLog(
+        store,
+        `Người thuê gửi yêu cầu ${request.id}`,
+        `requests/${request.id}`,
+        `${tenant.name} - phòng ${room.id}: ${request.title}`
+      );
+      saveStore(store);
+      event.currentTarget.reset();
+      requestDialog.close();
+      render();
+      try {
+        await syncFirebaseUpdates({
+          [`requests/${request.id}`]: request,
+          [`activityLogs/${activityLog.id}`]: activityLog
+        });
+      } catch (error) {
+        firebaseWriteError(error);
+      }
+    });
+
+    document.addEventListener("click", (event) => {
+      const powerButton = event.target.closest("[data-power]");
+      if (powerButton && room) {
+        const device = roomDevices(store, room.id).find((item) => item.id === powerButton.dataset.power);
+        if (!device) return;
+        device.power = !device.power;
+        saveDeviceChange(device, `${device.power ? "Bật" : "Tắt"} ${device.name.toLowerCase()}`);
+      }
+
+      const doorButton = event.target.closest("[data-door]");
+      if (doorButton && room) {
+        const device = roomDevices(store, room.id).find((item) => item.id === doorButton.dataset.door);
+        if (!device) return;
+        device.state = doorButton.dataset.state;
+        saveDeviceChange(device, device.state === "locked" ? "Khóa cửa" : "Mở khóa cửa");
+      }
+
+      const fanButton = event.target.closest("[data-fan-set]");
+      if (fanButton && room) {
+        const device = roomDevices(store, room.id).find((item) => item.id === fanButton.dataset.fanSet);
+        if (!device) return;
+        device.speed = Number(fanButton.dataset.speed || 1);
+        device.power = true;
+        saveDeviceChange(device, `Đổi quạt trần sang mức ${device.speed}`);
+      }
+
+      const acStep = event.target.closest("[data-ac-step]");
+      if (acStep && room) {
+        const device = roomDevices(store, room.id).find((item) => item.id === acStep.dataset.acStep);
+        if (!device) return;
+        const nextTemp = Number(device.temp || 26) + Number(acStep.dataset.step || 0);
+        device.temp = Math.min(32, Math.max(16, nextTemp));
+        device.power = true;
+        saveDeviceChange(device, `Đổi máy lạnh ${device.temp}°C`);
+      }
+    });
+
+    document.addEventListener("change", (event) => {
+      if (!room) return;
+      const devices = roomDevices(store, room.id);
+      const fanSpeed = event.target.closest("[data-fan-speed]");
+      const acTemp = event.target.closest("[data-ac-temp]");
+      const acMode = event.target.closest("[data-ac-mode]");
+      const acFan = event.target.closest("[data-ac-fan]");
+      const control = fanSpeed || acTemp || acMode || acFan;
+      if (!control) return;
+
+      const device = devices.find((item) => item.id === control.dataset.fanSpeed || item.id === control.dataset.acTemp || item.id === control.dataset.acMode || item.id === control.dataset.acFan);
+      if (!device) return;
+      if (fanSpeed) {
+        device.speed = Number(fanSpeed.value || 1);
+        device.power = true;
+        saveDeviceChange(device, `Đổi quạt trần sang mức ${device.speed}`);
+      }
+      if (acTemp) {
+        device.temp = Number(acTemp.value || 26);
+        device.power = true;
+        saveDeviceChange(device, `Đổi máy lạnh ${device.temp}°C`);
+      }
+      if (acMode) {
+        device.mode = acMode.value;
+        device.power = true;
+        saveDeviceChange(device, `Đổi máy lạnh sang ${deviceModeText(device.mode)}`);
+      }
+      if (acFan) {
+        device.fanSpeed = acFan.value;
+        device.power = true;
+        saveDeviceChange(device, "Đổi tốc độ gió máy lạnh");
+      }
+    });
+
+    document.querySelectorAll("[data-tenant-page]").forEach((link) => {
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        history.replaceState(null, "", `#${link.dataset.tenantPage}`);
+        showTenantPage(link.dataset.tenantPage);
+      });
+    });
+
+    render();
+  </script>
+</body>
+</html>

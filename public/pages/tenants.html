@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Người thuê | SmartRoom</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="../css/smartroom.css?v=101">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand"><i class="fa-solid fa-house-signal"></i><span>SmartRoom</span></div>
+        <button class="sidebar-toggle" id="sidebarToggle" type="button" title="Thu gọn"><i class="fa-solid fa-bars"></i></button>
+      </div>
+      <nav class="menu">
+        <a href="dashboard.html"><i class="fa-solid fa-table-columns"></i><span>Dashboard</span></a>
+        <a href="rooms.html"><i class="fa-solid fa-building"></i><span>Phòng</span></a>
+        <a class="active" href="tenants.html"><i class="fa-solid fa-users"></i><span>Người thuê</span></a>
+        <a href="accounts.html"><i class="fa-solid fa-user-shield"></i><span>Tài khoản</span></a>
+      </nav>
+      <button class="logout-btn" id="logoutBtn" type="button"><i class="fa-solid fa-right-from-bracket"></i><span>Đăng xuất</span></button>
+    </aside>
+
+    <main class="main">
+      <header class="page-head">
+        <h1>Người thuê</h1>
+        <button class="btn btn-primary" id="openTenantDialog"><i class="fa-solid fa-user-plus"></i> Thêm người thuê</button>
+      </header>
+
+      <section class="stats-grid" id="tenantStats"></section>
+
+      <section class="panel">
+        <div class="toolbar">
+          <input id="search" placeholder="Tìm tên, phòng, số điện thoại">
+          <select id="statusFilter">
+            <option value="all">Tất cả trạng thái</option>
+            <option value="active">Đang thuê</option>
+            <option value="left">Đã rời</option>
+          </select>
+          <select id="roomFilter"></select>
+          <button class="btn btn-secondary" id="refresh">Cập nhật</button>
+        </div>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Người thuê</th>
+              <th>Phòng</th>
+              <th>Liên hệ</th>
+              <th>Ngày vào</th>
+              <th>Tiền cọc</th>
+              <th>Trạng thái</th>
+              <th>Thao tác</th>
+            </tr>
+          </thead>
+          <tbody id="tenantRows"></tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="dialog" id="tenantDialog">
+    <form id="tenantForm">
+      <div class="dialog-head">
+        <h2>Thêm người thuê</h2>
+        <button class="btn btn-secondary" type="button" data-close>Đóng</button>
+      </div>
+      <div class="dialog-grid">
+        <label class="field"><span>Họ tên</span><input name="name" required placeholder="Nhập họ tên"></label>
+        <label class="field"><span>Số điện thoại</span><input name="phone" required placeholder="Nhập số điện thoại"></label>
+        <label class="field"><span>Email/Gmail</span><input name="email" type="email" required placeholder="Nhập email"></label>
+        <label class="field"><span>Phòng thuê</span><select name="roomId" id="availableRooms" required></select></label>
+        <label class="field"><span>Ngày vào</span><input name="startDate" type="date" required></label>
+        <label class="field"><span>Tiền cọc</span><input name="deposit" type="number" value="0"></label>
+      </div>
+      <div class="auth-login-section">
+        <div class="field auth-method-field">
+          <span>Phương thức đăng nhập</span>
+          <div class="auth-method-options" role="radiogroup" aria-label="Phương thức đăng nhập">
+            <label class="auth-method-option">
+              <input type="radio" name="authMethod" value="google" checked>
+              <span>Google</span>
+            </label>
+            <label class="auth-method-option">
+              <input type="radio" name="authMethod" value="both">
+              <span>Google + Tài khoản</span>
+            </label>
+          </div>
+        </div>
+        <div class="login-fields" id="loginFields" hidden>
+          <label class="field"><span>Tên đăng nhập</span><input name="username" placeholder="Nhập tên đăng nhập" autocomplete="username"></label>
+          <label class="field password-field"><span>Mật khẩu</span><input name="password" type="password" placeholder="Nhập mật khẩu" autocomplete="new-password"><button type="button" class="password-eye" id="tenantPasswordToggle" aria-label="Hiện mật khẩu"><i class="fa-regular fa-eye"></i></button></label>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-primary">Lưu người thuê</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="../js/smartroom-layout.js?v=101"></script>
+  <script type="module">
+    import {
+      loadStore,
+      loadStoreWithFirebase,
+      saveStore,
+      money,
+      nextId,
+      assignTenantToRoom,
+      releaseRoom,
+      roomById,
+      accountByEmail,
+      statusBadge,
+      addActivityLog,
+      syncFirebaseUpdates,
+      firebaseWriteError
+    } from "../js/smartroom-store.js?v=101";
+
+    let store = await loadStoreWithFirebase();
+    const tenantDialog = document.getElementById("tenantDialog");
+    const search = document.getElementById("search");
+    const statusFilter = document.getElementById("statusFilter");
+    const roomFilter = document.getElementById("roomFilter");
+    const loginFields = document.getElementById("loginFields");
+    const passwordInput = document.querySelector('#tenantForm input[name="password"]');
+    const usernameInput = document.querySelector('#tenantForm input[name="username"]');
+
+    function syncAuthMethodFields() {
+      const method = document.querySelector('#tenantForm input[name="authMethod"]:checked')?.value || "google";
+      const needsPasswordLogin = method === "both";
+      loginFields.hidden = !needsPasswordLogin;
+      loginFields.style.display = needsPasswordLogin ? "grid" : "none";
+      loginFields.classList.toggle("is-visible", needsPasswordLogin);
+      usernameInput.required = needsPasswordLogin;
+      passwordInput.required = needsPasswordLogin;
+      if (!needsPasswordLogin) {
+        usernameInput.value = "";
+        passwordInput.value = "";
+      }
+    }
+
+    function renderStats() {
+      const active = store.tenants.filter((tenant) => tenant.status === "active").length;
+      const activeTenantIds = new Set(store.tenants.filter((tenant) => tenant.status === "active").map((tenant) => tenant.id));
+      const withAccount = store.accounts.filter((account) => account.role === "tenant" && activeTenantIds.has(account.tenantId)).length;
+      const late = store.rooms.filter((room) => room.status === "occupied" && room.paymentStatus === "late").length;
+      const items = [
+        ["blue", "fa-users", "Tổng người thuê", store.tenants.length, "Đã lưu hồ sơ"],
+        ["green", "fa-house-user", "Đang thuê", active, "Đang gán phòng"],
+        ["orange", "fa-user-shield", "TK đăng nhập", withAccount, "Đã cấp cho người thuê"],
+        ["red", "fa-clock", "Chậm thanh toán", late, "Theo hóa đơn tháng"]
+      ];
+      document.getElementById("tenantStats").innerHTML = items.map(([color, icon, label, value, note]) => `
+        <article class="card stat-card">
+          <div class="stat-icon ${color}"><i class="fa-solid ${icon}"></i></div>
+          <div><p class="stat-label">${label}</p><p class="stat-value">${value}</p><p class="stat-note">${note}</p></div>
+        </article>
+      `).join("");
+    }
+
+    function renderFilters() {
+      roomFilter.innerHTML = `<option value="all">Tất cả phòng</option>` + store.rooms.map((room) => `<option value="${room.id}">${room.id}</option>`).join("");
+      document.getElementById("availableRooms").innerHTML = store.rooms
+        .filter((room) => room.status === "vacant" && !room.tenantId)
+        .map((room) => `<option value="${room.id}">${room.id} - ${room.building} - ${money(room.rent)}</option>`)
+        .join("") || `<option value="">Không còn phòng trống</option>`;
+    }
+
+    function accountForTenant(tenantId) {
+      return store.accounts.find((account) => account.role === "tenant" && account.tenantId === tenantId);
+    }
+
+    function renderTenants() {
+      const keyword = search.value.trim().toLowerCase();
+      const rows = store.tenants.filter((tenant) => {
+        const room = roomById(store, tenant.roomId);
+        const text = `${tenant.name} ${tenant.phone} ${tenant.email} ${tenant.roomId}`.toLowerCase();
+        return (!keyword || text.includes(keyword))
+          && (statusFilter.value === "all" || tenant.status === statusFilter.value)
+          && (roomFilter.value === "all" || tenant.roomId === roomFilter.value);
+      });
+
+      document.getElementById("tenantRows").innerHTML = rows.map((tenant) => {
+        const room = roomById(store, tenant.roomId);
+        const roomLabel = tenant.roomId || "Chưa gán phòng";
+        const roomNote = room ? `${room.building} · Tầng ${room.floor}` : "Phòng đã xóa hoặc chưa tồn tại";
+        const roomAction = room
+          ? `<a class="btn btn-secondary" href="rooms.html?room=${tenant.roomId}">Phòng</a>`
+          : `<span class="badge badge-gray">Không còn phòng</span>`;
+        const loginAccount = accountForTenant(tenant.id);
+        const loginStatus = loginAccount
+          ? `<span class="badge ${statusBadge(loginAccount.status)}">${loginAccount.status === "active" ? "Có TK đăng nhập" : "TK bị khóa"}</span>`
+          : `<span class="badge badge-gray">Chưa cấp TK đăng nhập</span>`;
+        return `
+          <tr>
+            <td><strong>${tenant.name}</strong><br><span class="muted">${tenant.email || "-"}</span><br>${loginStatus}</td>
+            <td>${roomLabel}<br><span class="muted">${roomNote}</span></td>
+            <td>${tenant.phone}</td>
+            <td>${tenant.startDate}</td>
+            <td>${money(tenant.deposit)}</td>
+            <td><span class="badge ${statusBadge(tenant.status)}">${tenant.status === "active" ? "Đang thuê" : "Đã rời"}</span></td>
+            <td class="actions">
+              ${roomAction}
+              ${tenant.status === "active" ? `<button class="btn btn-danger" data-end="${tenant.id}">Kết thúc thuê</button>` : `<span class="badge badge-gray">Đã kết thúc</span>`}
+            </td>
+          </tr>
+        `;
+      }).join("") || `<tr><td colspan="7">Không có người thuê phù hợp.</td></tr>`;
+    }
+
+    function renderAll() {
+      renderStats();
+      renderFilters();
+      renderTenants();
+    }
+
+    document.getElementById("openTenantDialog").addEventListener("click", () => {
+      const startInput = document.querySelector('#tenantForm input[name="startDate"]');
+      if (startInput && !startInput.value) startInput.valueAsDate = new Date();
+      syncAuthMethodFields();
+      tenantDialog.showModal();
+    });
+    document.addEventListener("click", (event) => {
+      if (event.target.matches("[data-close]")) event.target.closest("dialog").close();
+      const endButton = event.target.closest("[data-end]");
+      if (!endButton) return;
+      const tenant = store.tenants.find((item) => item.id === endButton.dataset.end);
+      if (!tenant || !confirm(`Kết thúc thuê của ${tenant.name}?`)) return;
+      tenant.status = "left";
+      tenant.leftDate = new Date().toLocaleDateString("vi-VN");
+      const oldRoomId = tenant.roomId;
+      releaseRoom(store, tenant.roomId);
+      const room = roomById(store, oldRoomId);
+      const affectedAccounts = store.accounts.filter((account) => account.tenantId === tenant.id);
+      affectedAccounts.forEach((account) => {
+        account.status = "locked";
+        account.tenantId = "";
+        account.roomId = "";
+      });
+      const log = addActivityLog(
+        store,
+        `Kết thúc thuê ${tenant.name}`,
+        `tenants/${tenant.id}`,
+        `Phòng ${oldRoomId} chuyển về phòng trống`
+      );
+      saveStore(store);
+      renderAll();
+      const accountUpdates = Object.fromEntries(
+        affectedAccounts.map((account) => [`accounts/${account.id}`, account])
+      );
+      syncFirebaseUpdates({
+        [`tenants/${tenant.id}`]: tenant,
+        [`rooms/${oldRoomId}`]: room,
+        [`activityLogs/${log.id}`]: log,
+        ...accountUpdates
+      }).catch(firebaseWriteError);
+    });
+
+    document.getElementById("tenantForm").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(event.currentTarget));
+      if (!data.roomId) {
+        alert("Chưa có phòng trống để gán.");
+        return;
+      }
+      const email = data.email.trim().toLowerCase();
+      const authMethod = data.authMethod || "google";
+      const wantsPasswordLogin = authMethod === "both";
+      const username = (data.username || "").trim();
+      const password = (data.password || "").trim();
+      if (!email) {
+        alert("Vui lòng nhập Email/Gmail để tạo tài khoản đăng nhập cho người thuê.");
+        return;
+      }
+      if (email && store.tenants.some((item) => item.status === "active" && item.email && item.email.toLowerCase() === email)) {
+        alert("Email này đang thuộc một người thuê đang hoạt động.");
+        return;
+      }
+
+      let existingAccount = accountByEmail(store, email);
+      if (existingAccount && existingAccount.role !== "tenant") {
+        alert("Email này đang thuộc tài khoản quản lý, không thể dùng làm tài khoản người thuê.");
+        return;
+      }
+      const activeLinkedTenant = existingAccount?.tenantId
+        ? store.tenants.find((item) => item.id === existingAccount.tenantId && item.status === "active")
+        : null;
+      if (activeLinkedTenant) {
+        alert("Email này đã được gắn với một người thuê đang hoạt động.");
+        return;
+      }
+
+      if (wantsPasswordLogin && (!username || !password)) {
+        alert("Vui lòng nhập tên đăng nhập và mật khẩu khi chọn Google + Tài khoản.");
+        return;
+      }
+      if (wantsPasswordLogin) {
+        const normalizedUsername = username.toLowerCase();
+        const usernameExists = store.accounts.some((account) => account.id !== existingAccount?.id && account.username && account.username.toLowerCase() === normalizedUsername);
+        if (usernameExists) {
+          alert("Tên đăng nhập này đã tồn tại. Hãy chọn tên khác.");
+          return;
+        }
+      }
+      const tenant = {
+        id: nextId("T", store.tenants),
+        name: data.name.trim(),
+        phone: data.phone.trim(),
+        email,
+        roomId: data.roomId,
+        startDate: data.startDate,
+        deposit: Number(data.deposit || 0),
+        status: "active"
+      };
+
+      let account = null;
+      const room = assignTenantToRoom(store, tenant);
+      if (!room) {
+        alert("Phòng này không còn trống hoặc không thể gán. Hãy chọn lại phòng khác.");
+        renderAll();
+        return;
+      }
+      store.tenants.push(tenant);
+
+      if (existingAccount) {
+        account = existingAccount;
+        account.name = tenant.name;
+        account.role = "tenant";
+        account.status = "active";
+        account.tenantId = tenant.id;
+        account.roomId = tenant.roomId;
+        account.authMethod = authMethod;
+        if (wantsPasswordLogin) {
+          account.username = username;
+          account.password = password;
+        } else {
+          account.username = "";
+          account.password = "";
+        }
+      } else {
+        account = {
+          id: nextId("A", store.accounts),
+          name: tenant.name,
+          email: tenant.email,
+          role: "tenant",
+          status: "active",
+          tenantId: tenant.id,
+          roomId: tenant.roomId,
+          username: wantsPasswordLogin ? username : "",
+          authMethod,
+          password: wantsPasswordLogin ? password : ""
+        };
+        store.accounts.push(account);
+      }
+
+      const log = addActivityLog(
+        store,
+        `Thêm người thuê ${tenant.name}`,
+        `tenants/${tenant.id}`,
+        `Gán vào phòng ${tenant.roomId}, tạo/liên kết tài khoản đăng nhập ${authMethod === "both" ? "Google + Tài khoản" : "Google"}`
+      );
+      saveStore(store);
+      event.currentTarget.reset();
+      syncAuthMethodFields();
+      tenantDialog.close();
+      renderAll();
+      try {
+        await syncFirebaseUpdates({
+          [`tenants/${tenant.id}`]: tenant,
+          [`rooms/${tenant.roomId}`]: room,
+          [`activityLogs/${log.id}`]: log,
+          ...(account ? { [`accounts/${account.id}`]: account } : {})
+        });
+      } catch (error) {
+        firebaseWriteError(error);
+      }
+    });
+
+    document.querySelectorAll('#tenantForm input[name="authMethod"]').forEach((input) => {
+      input.addEventListener("change", syncAuthMethodFields);
+    });
+    document.getElementById("tenantPasswordToggle")?.addEventListener("click", () => {
+      const show = passwordInput.type === "password";
+      passwordInput.type = show ? "text" : "password";
+      const icon = document.querySelector("#tenantPasswordToggle i");
+      if (icon) icon.className = show ? "fa-regular fa-eye-slash" : "fa-regular fa-eye";
+    });
+    [search, statusFilter, roomFilter].forEach((control) => control.addEventListener("input", renderTenants));
+    document.getElementById("refresh").addEventListener("click", renderAll);
+    syncAuthMethodFields();
+    renderAll();
+  </script>
+</body>
+</html>
